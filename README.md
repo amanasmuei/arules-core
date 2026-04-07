@@ -493,3 +493,9 @@ To stay focused, `arules-core` deliberately does not provide:
 ## License
 
 [MIT](LICENSE) © Aman Asmuei
+
+---
+
+<div align="center">
+  <sub>Built with ❤️ in 🇲🇾 <strong>Malaysia</strong> · Part of the <a href="https://github.com/amanasmuei">aman ecosystem</a></sub>
+</div>
