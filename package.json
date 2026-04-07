@@ -1,6 +1,6 @@
 {
   "name": "@aman_asmuei/arules-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The guardrails layer for the aman ecosystem — multi-tenant Ruleset records with runtime enforcement (checkAction, checkToolCall, getGuardrailsPrompt) upstreamed from aman-tg, built on @aman_asmuei/aman-core.",
   "type": "module",
   "main": "./dist/index.js",
