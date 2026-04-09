@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as os from "node:os";
 import {
+  type Scope,
   type Storage,
   MarkdownFileStorage,
   DatabaseStorage,
@@ -40,13 +41,34 @@ let _markdownStorage: MarkdownFileStorage<Ruleset> | null = null;
 let _databaseStorage: DatabaseStorage<Ruleset> | null = null;
 
 /**
+ * Default read-only scope inheritance policy for arules (mirrors acore-core):
+ *
+ *   dev:plugin   → no fallback (root of the chain)
+ *   dev:<other>  → falls back to dev:plugin
+ *
+ * Rationale: a user who set up guardrails via aman-plugin should see the
+ * same guardrails in any new surface (Copilot, aman-agent, ...) without
+ * re-entry. Writes never cascade — each scope's ruleset mutations stay
+ * local. See acore-core's storage.ts for the full rationale.
+ */
+function defaultDevFallbackChain(requested: Scope): Scope[] {
+  if (requested.startsWith("dev:") && requested !== "dev:plugin") {
+    return ["dev:plugin"];
+  }
+  return [];
+}
+
+/**
  * Get the markdown-backed storage for dev-side scopes. Cached.
  */
 export function getMarkdownStorage(): MarkdownFileStorage<Ruleset> {
   if (!_markdownStorage) {
+    const root = getArulesHome();
     _markdownStorage = new MarkdownFileStorage<Ruleset>({
-      root: getArulesHome(),
+      root,
       filename: ARULES_FILENAME,
+      fallbackChain: defaultDevFallbackChain,
+      legacyPath: path.join(root, ARULES_FILENAME),
       ...rulesetCodec,
     });
   }
