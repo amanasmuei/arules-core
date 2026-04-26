@@ -47,11 +47,17 @@ const STOPWORDS = new Set([
 ]);
 
 /**
- * Categories that contain prohibitions by convention. The "Never" category
- * is treated as fully prohibitive; other categories are scanned for rules
- * containing prohibition keywords.
+ * Categories that contain prohibitions by convention. Both the "Never" AND
+ * "Always" categories are fully prescriptive — every rule in them is a
+ * constraint Aman wants enforced. (Always rules like "Ask before deleting
+ * files" are positive obligations whose negation would be a violation; they
+ * deserve enforcement just like Never rules.)
+ *
+ * Other categories (Coding, Communication, etc.) are scanned for rules
+ * containing prohibition keywords ("never", "don't", "must not", etc.) so
+ * imperative-prohibitions in arbitrary categories still get flagged.
  */
-const PROHIBITION_CATEGORY = "never";
+const PROHIBITION_CATEGORIES = new Set(["never", "always"]);
 const PROHIBITION_KEYWORDS = [
   "never",
   "don't",
@@ -78,17 +84,20 @@ export const DEFAULT_PROMPT_CATEGORIES = [
 /**
  * Check if a proposed action might violate any active rules.
  *
- * Algorithm: collect all "prohibition" rules (everything in the Never
- * category, plus rules in other categories that contain prohibition
+ * Algorithm: collect all "prohibition" rules (everything in Never AND Always
+ * categories, plus rules in other categories that contain prohibition
  * keywords like "never", "don't", "must not"). For each prohibition rule,
- * extract the meaningful keywords (length > 3, not a stopword) and check if
- * the action description contains at least 2 of them. If so, flag it as a
- * potential violation.
+ * extract the meaningful keywords (length > 3, not a stopword) AND apply
+ * light stemming (strip s/ed/ing, prefix-match length ≥ 4) so plural/gerund
+ * forms in the action match singular/infinitive forms in the rule. Flag the
+ * rule if at least 2 keyword stems match.
  *
- * This is the same naive keyword-overlap algorithm `aman-tg/guardrails.ts`
- * has used in production. It has known false positives and false negatives —
- * a future version should layer in semantic matching. For now, the API
- * stability is more important than perfection.
+ * The Always-category inclusion + stemming were added as the Phase 1.5 fix
+ * (2026-04-26) for the bug where `delete the file ~/test.txt without asking`
+ * returned safe:true despite obviously violating "Always: Ask before deleting
+ * files" and "Never: Never delete files autonomously". The bug had two
+ * causes: Always rules were silently dropped, and naive substring matching
+ * couldn't connect `delete` ↔ `deleting`, `file` ↔ `files`.
  */
 export function checkAction(
   action: string,
@@ -100,7 +109,8 @@ export function checkAction(
   const prohibitions: string[] = [];
 
   for (const cat of categories) {
-    if (cat.name.toLowerCase() === PROHIBITION_CATEGORY) {
+    const lowerName = cat.name.toLowerCase();
+    if (PROHIBITION_CATEGORIES.has(lowerName)) {
       prohibitions.push(...cat.rules);
       continue;
     }
@@ -114,11 +124,20 @@ export function checkAction(
     }
   }
 
-  const actionLower = action.toLowerCase();
+  // Stem-aware action tokenization (mirrors extractKeywords below)
+  const actionStems = action
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/[^a-z0-9-]/g, ""))
+    .filter((w) => w.length > 3)
+    .map(stem);
+
   const violations = prohibitions.filter((rule) => {
-    const keywords = extractKeywords(rule);
-    if (keywords.length === 0) return false;
-    const matchCount = keywords.filter((kw) => actionLower.includes(kw)).length;
+    const ruleStems = extractKeywords(rule);
+    if (ruleStems.length === 0) return false;
+    const matchCount = ruleStems.filter((rs) =>
+      actionStems.some((as) => stemMatches(rs, as)),
+    ).length;
     return matchCount >= 2;
   });
 
@@ -126,8 +145,35 @@ export function checkAction(
 }
 
 /**
- * Extract meaningful keywords from a rule for matching. Lowercase, length > 3,
- * stopwords removed.
+ * Strip light suffixes so `deleting` ↔ `delete`, `files` ↔ `file`,
+ * `confirmed` ↔ `confirm` all reduce to a comparable stem.
+ *
+ * Conservative: only strips `ing` / `ed` / `s` and only when the resulting
+ * stem stays at least 4 chars long (avoids over-stripping short words).
+ */
+function stem(word: string): string {
+  if (word.length < 5) return word;
+  if (word.endsWith("ing") && word.length >= 6) return word.slice(0, -3);
+  if (word.endsWith("ed") && word.length >= 5) return word.slice(0, -2);
+  if (word.endsWith("s") && word.length >= 4) return word.slice(0, -1);
+  return word;
+}
+
+/**
+ * Two stems match if equal OR if one is a prefix of the other (both ≥ 4
+ * chars). Catches `delet` (stem of `deleting`) ↔ `delete` (already a stem).
+ */
+function stemMatches(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length >= 4 && b.length >= 4) {
+    if (a.startsWith(b) || b.startsWith(a)) return true;
+  }
+  return false;
+}
+
+/**
+ * Extract meaningful keyword stems from a rule for matching. Lowercase,
+ * length > 3, stopwords removed, light stemming applied.
  */
 function extractKeywords(rule: string): string[] {
   return rule
@@ -135,7 +181,8 @@ function extractKeywords(rule: string): string[] {
     .split(/\s+/)
     .map((w) => w.replace(/[^a-z0-9-]/g, ""))
     .filter((w) => w.length > 3)
-    .filter((w) => !STOPWORDS.has(w));
+    .filter((w) => !STOPWORDS.has(w))
+    .map(stem);
 }
 
 function containsWord(haystack: string, word: string): boolean {

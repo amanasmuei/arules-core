@@ -90,6 +90,81 @@ describe("checkActionPure", () => {
     );
     expect(result.safe).toBe(false);
   });
+
+  // --- Phase 1.5 Bug 2 regression tests (added 2026-04-26) ---
+  // The fix: include Always category in prohibition set + stem-aware matching
+  // so plural/gerund forms in actions match singular/infinitive in rules.
+
+  describe("Always category enforcement (Phase 1.5 Bug 2)", () => {
+    const withAlways: Ruleset = {
+      content: `# Guardrails
+
+## Always
+- Ask before deleting files or data
+- Confirm before destructive actions
+
+## Never
+- Never push to main without approval
+`,
+    };
+
+    it("flags actions matching Always-category rules (delete file without asking)", () => {
+      // The original bug case: this returned safe:true because Always rules
+      // weren't in the prohibition set AND naive matching couldn't connect
+      // delete↔deleting / file↔files.
+      const result = checkActionPure(
+        "delete the file ~/test.txt without asking",
+        withAlways,
+      );
+      expect(result.safe).toBe(false);
+      expect(result.violations.length).toBeGreaterThan(0);
+      expect(
+        result.violations.some((v) => v.toLowerCase().includes("deleting files")),
+      ).toBe(true);
+    });
+
+    it("Always rules are included even without prohibition keywords like 'never'", () => {
+      // "Ask before deleting" has no prohibition keyword — used to be silently
+      // dropped. Should now be flagged via Always-category inclusion.
+      const result = checkActionPure(
+        "deleting many files in production",
+        withAlways,
+      );
+      expect(result.safe).toBe(false);
+    });
+  });
+
+  describe("Stem-aware matching (Phase 1.5 Bug 2)", () => {
+    const stemRuleset: Ruleset = {
+      content: `# Rules
+
+## Never
+- Never delete production files
+`,
+    };
+
+    it("matches gerund (deleting) with infinitive (delete) in rule", () => {
+      const result = checkActionPure(
+        "deleting production files now",
+        stemRuleset,
+      );
+      expect(result.safe).toBe(false);
+    });
+
+    it("matches plural (files) with rule keyword (file would also match)", () => {
+      const result = checkActionPure(
+        "delete the file in production now",
+        stemRuleset,
+      );
+      expect(result.safe).toBe(false);
+    });
+
+    it("does NOT over-match unrelated short prefixes", () => {
+      // "del" is too short for prefix matching (< 4 chars) — should not flag
+      const result = checkActionPure("write a delegation note", stemRuleset);
+      expect(result.safe).toBe(true);
+    });
+  });
 });
 
 describe("checkToolCallPure", () => {
