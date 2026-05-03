@@ -165,6 +165,54 @@ describe("checkActionPure", () => {
       expect(result.safe).toBe(true);
     });
   });
+
+  // --- Phase 1.5 Bug 5 regression tests (added 2026-05-03) ---
+  // Shell-command verbs (rm, rmdir, unlink, etc.) are too short for the
+  // length>3 keyword floor and don't appear in English-imperative rules.
+  // Fix expands them to their semantic equivalents before tokenization so
+  // `rm -rf foo` matches the same delete-rules that `delete foo` already does.
+
+  describe("Shell-verb synonym expansion (Phase 1.5 Bug 5)", () => {
+    const withAlways: Ruleset = {
+      content: `# Guardrails
+
+## Always
+- Ask before deleting files or data
+
+## Never
+- Never delete files autonomously without confirmation
+`,
+    };
+
+    it("flags `rm -rf` against delete rules (doc reproduction)", () => {
+      // Exact failing probe from Bug 2 verification matrix:
+      // rules_check({action: "rm -rf the work dir to start clean"}) → safe:true
+      const result = checkActionPure(
+        "rm -rf the work dir to start clean",
+        withAlways,
+      );
+      expect(result.safe).toBe(false);
+      expect(
+        result.violations.some((v) => v.toLowerCase().includes("deleting files")),
+      ).toBe(true);
+    });
+
+    it("flags `rmdir` as directory deletion", () => {
+      const result = checkActionPure("rmdir the cache directory", withAlways);
+      expect(result.safe).toBe(false);
+    });
+
+    it("flags `unlink` as file deletion", () => {
+      const result = checkActionPure("unlink the lockfile", withAlways);
+      expect(result.safe).toBe(false);
+    });
+
+    it("does NOT flag innocuous shell text without destructive verbs", () => {
+      // Sanity: `ls` and `cat` are not in the synonym map, no false positive
+      const result = checkActionPure("ls and cat the readme file", withAlways);
+      expect(result.safe).toBe(true);
+    });
+  });
 });
 
 describe("checkToolCallPure", () => {

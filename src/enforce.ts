@@ -70,6 +70,44 @@ const PROHIBITION_KEYWORDS = [
 ];
 
 /**
+ * Shell-command verbs mapped to the English imperatives the rule engine
+ * already knows how to match. Applied to action text before tokenization.
+ *
+ * Phase 1.5 Bug 5 (filed 2026-04-26, fixed 2026-05-03): `rules_check`
+ * returned `safe:true` for `rm -rf the work dir to start clean` because
+ * `rm` (length 2) was dropped by the `length > 3` keyword floor. Rather
+ * than lower the floor (false-positive risk), we expand the handful of
+ * destructive shell verbs to their English equivalents so the existing
+ * stem-matching pipeline catches them.
+ *
+ * Intentionally narrow — only the verbs that map cleanly to existing
+ * delete/overwrite rules. Broader sophistication (chmod, kill, git
+ * commands, etc.) is deferred to a future "rules_check sophistication"
+ * intention.
+ */
+const SHELL_VERB_SYNONYMS: Record<string, string> = {
+  rm: "remove delete files",
+  rmdir: "remove delete files directory",
+  unlink: "delete files",
+  truncate: "delete data",
+  shred: "delete files",
+  dd: "overwrite data",
+};
+
+/**
+ * Expand shell-command verbs in `action` to their English equivalents
+ * (see `SHELL_VERB_SYNONYMS`). Only the matched token is replaced; the
+ * rest of the action text passes through unchanged.
+ */
+function expandShellSynonyms(action: string): string {
+  return action
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => SHELL_VERB_SYNONYMS[w] ?? w)
+    .join(" ");
+}
+
+/**
  * Categories included in the system prompt by default. The runtime enforcer
  * (`checkAction`) doesn't use this list — it scans all rules — but the
  * prompt-injection helper (`getGuardrailsPrompt`) does.
@@ -124,9 +162,10 @@ export function checkAction(
     }
   }
 
-  // Stem-aware action tokenization (mirrors extractKeywords below)
-  const actionStems = action
-    .toLowerCase()
+  // Stem-aware action tokenization (mirrors extractKeywords below).
+  // Shell verbs are expanded first so `rm -rf foo` matches delete-rules
+  // the same way `delete foo` does (Phase 1.5 Bug 5).
+  const actionStems = expandShellSynonyms(action)
     .split(/\s+/)
     .map((w) => w.replace(/[^a-z0-9-]/g, ""))
     .filter((w) => w.length > 3)
